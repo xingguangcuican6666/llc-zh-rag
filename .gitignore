@@ -1,0 +1,30 @@
+# 本地模型（体积大，不入库；用 setup.sh 重新下载）
+*.gguf
+models/
+
+# 游戏文本派生数据：可由 setup.sh 在本地游戏安装上重建，且不重分发游戏文本
+# tm_vecs.npy + tm_meta.jsonl (247M) —— build_tm.py 重建
+rag/index/
+# 官方韩文基线 —— llc snapshot 重建
+rag/snapshot.json
+# 派生词表 —— build_glossary.py 重建
+rag/glossary_locked.json
+glossary.json
+# 按 mtime 可重建
+rag/mine_rels.json
+# 评测输出（含游戏文本）
+rag/eval_results.jsonl
+rag/eval_results_14b.jsonl
+rag/eval_results_14b2.jsonl
+rag/eval_results_cpu.jsonl
+rag/eval_results_hq.jsonl
+rag/eval_results_hq2.jsonl
+# 服务日志
+rag/logs/
+
+# python 缓存
+__pycache__/
+*.pyc
+
+# 每台机器的私有配置（用 .llcenv.example 生成）
+/.llcenv

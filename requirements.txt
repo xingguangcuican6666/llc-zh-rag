@@ -1,0 +1,5 @@
+# 流水线运行期依赖（翻译 + 索引）
+numpy
+requests
+# setup.sh 下载模型用
+huggingface_hub

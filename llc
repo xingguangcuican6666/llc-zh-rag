@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# LLC 翻译工作台 —— 边狱公司 zh-CN 周更流水线的唯一入口。
+#   llc status        查看显存 / 服务 / 快照 / 待翻译增量
+#   llc up [7b|14b]   启动本地模型服务（自动按空闲显存挑 NGL）
+#   llc down          安全停服（按端口，不用 pkill）
+#   llc plan          官方新文本 diff：看这次改了/新增了哪些韩文单元
+#   llc preview [N]    抽检 N 条增量的机翻结果（默认 8，不写文件）
+#   llc run           翻译增量并写入 Lang/LLC_zh-CN
+#   llc verify        跑结构校验（verify.py 存在时）
+#   llc snapshot      把当前官方文本记为新基线
+#   llc week          打印一次完整周更流程指引
+set -u
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+ROOT="$(cd "$(dirname "$SELF")" && pwd)"
+# 每台机器的路径来自可选的 .llcenv（不入库），source 后导出给 python/serve.sh
+[ -f "$ROOT/.llcenv" ] && { set -a; . "$ROOT/.llcenv"; set +a; }
+RAG="$ROOT/rag"
+SERVE="$RAG/serve.sh"
+QPORT=8080; EPORT=18080
+
+free_vram(){ nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '; }
+used_vram(){ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '; }
+q_up(){ curl -sf http://127.0.0.1:$QPORT/health >/dev/null 2>&1; }
+e_up(){ curl -sf http://127.0.0.1:$EPORT/health >/dev/null 2>&1; }
+q_model(){ curl -s http://127.0.0.1:$QPORT/props 2>/dev/null | grep -oP 'qwen2\.5-\K[0-9]+b' | head -1; }
+
+# 14B 约 48 层，GPU 占用 ≈ 1800 + NGL*187 MiB；7B(28层)可整卡
+pick_ngl(){
+  local model="$1" free="$2" n
+  [ -z "$free" ] && { echo ""; return; }
+  if [ "$model" = 7b ]; then
+    [ "$free" -ge 6200 ] && { echo 99; return; }
+    n=$(( (free-1500)/165 ))
+  else
+    n=$(( (free-1800)/187 ))
+    [ "$n" -gt 48 ] && n=48
+  fi
+  [ "$n" -lt 1 ] && n=1
+  echo "$n"
+}
+
+cmd_status(){
+  local f u; f=$(free_vram); u=$(used_vram)
+  echo "显存      : 已用 ${u:-?} / 空闲 ${f:-?} MiB (共 8151)"
+  if q_up; then echo "Qwen :8080: 在线  (模型 $(q_model))"; else echo "Qwen :8080: 未启动"; fi
+  if e_up; then echo "BGE  :18080: 在线"; else echo "BGE  :18080: 未启动"; fi
+  if [ -f "$RAG/snapshot.json" ]; then
+    echo "基线快照  : $(stat -c '%y' "$RAG/snapshot.json" | cut -d. -f1)"
+  else echo "基线快照  : 无（先跑一次 llc snapshot）"; fi
+  if q_up && e_up; then
+    echo "----- 待翻译增量 (plan) -----"; ( cd "$RAG" && python3 incremental.py plan )
+  else
+    echo "(服务未全部在线，跳过 plan；先 llc up)"
+  fi
+}
+
+cmd_up(){
+  local want="${1:-14b}" run cur ngl free
+  if q_up; then
+    cur=$(q_model)
+    if [ "$cur" = "$want" ]; then echo "Qwen($cur) 已在线，无需重启。"; else
+      echo "当前在线的是 Qwen($cur)，你要 $want。先 'llc down' 释放显存，再 'llc up $want'。"; return 1
+    fi
+  else
+    free=$(free_vram); ngl=$(pick_ngl "$want" "$free")
+    echo "空闲显存 ${free:-?} MiB → 选择 QMODEL=$want NGL=${ngl:-默认}"
+    QMODEL="$want" ${ngl:+NGL="$ngl"} bash "$SERVE" qwen
+  fi
+  e_up || { echo "启动 BGE 嵌入服务..."; bash "$SERVE" bge; }
+  echo "等待服务就绪..."
+  for i in $(seq 1 60); do q_up && e_up && { echo "两个服务均已就绪。"; return 0; }; sleep 1; done
+  echo "超时：查看日志 $RAG/logs/qwen.log / bge.log"; return 1
+}
+
+cmd_down(){ bash "$SERVE" stop; }
+
+need_servers(){ q_up && e_up && return 0; echo "模型服务未就绪，请先运行:  llc up"; return 1; }
+
+cmd_verify(){
+  if [ -f "$RAG/verify.py" ]; then ( cd "$RAG" && python3 verify.py "$@" ); else
+    echo "verify.py 当前不在 $RAG（早期在 /tmp 被重启清掉了）。"
+    echo "需要的话我可以帮你重建一个 per-unit 结构校验器。"
+  fi
+}
+
+cmd_week(){
+  cat <<'TXT'
+每周官方更新后的标准流程：
+  1. llc up          # 启动服务（自动挑 NGL；游戏关掉可给更多显存）
+  2. llc plan        # 看官方这次新增/改了哪些韩文单元
+  3. llc preview 8   # 抽检几条机翻，眼过一遍质量
+  4. llc run         # 翻译增量并写入 Lang/LLC_zh-CN
+  5. llc verify      # 结构校验（可选）
+  6. llc snapshot    # 确认无误后重设基线，下次只挑新变化
+  7. llc down        # 用完停服，把显存还给游戏
+TXT
+}
+
+case "${1:-status}" in
+  status)   cmd_status ;;
+  up)       cmd_up "${2:-14b}" ;;
+  down)     cmd_down ;;
+  plan)     need_servers && ( cd "$RAG" && python3 incremental.py plan ) ;;
+  preview)  need_servers && ( cd "$RAG" && python3 incremental.py dryrun "${2:-8}" ) ;;
+  run)      need_servers && ( cd "$RAG" && python3 incremental.py run ) ;;
+  snapshot) ( cd "$RAG" && python3 incremental.py snapshot ) ;;
+  verify)   shift; cmd_verify "$@" ;;
+  week)     cmd_week ;;
+  -h|--help|help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "未知命令: $1"; sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

@@ -1,0 +1,14 @@
+# 每台机器自己的路径。复制为 .llcenv 并按需修改（.llcenv 不入库）：
+#   cp .llcenv.example .llcenv
+# llc / serve.sh 会自动 source 它并导出给子进程；python 脚本读 $LLC_LOC。
+
+# 游戏官方本地化目录（.../Resources_moved/Localize）
+export LLC_LOC="$HOME/.local/share/Steam/steamapps/common/Limbus Company/LimbusCompany_Data/Assets/Resources_moved/Localize"
+# GGUF 模型目录
+export LLC_MODELS="$HOME/zliu-runtime/models"
+# 带 CUDA 的 llama-server 可执行文件
+export LLC_LLAMA="$HOME/zliu-runtime/llama.cpp/build-cuda/bin/llama-server"
+# 下载代理（可留空直连）
+export LLC_PROXY="http://127.0.0.1:7890"
+# 可选：CUDA 运行库目录（默认 /opt/cuda/lib64）
+# export LLC_CUDA_LIB="/opt/cuda/lib64"
