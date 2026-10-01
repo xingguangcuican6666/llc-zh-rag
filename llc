@@ -64,7 +64,7 @@ cmd_up(){
   else
     free=$(free_vram); ngl=$(pick_ngl "$want" "$free")
     echo "空闲显存 ${free:-?} MiB → 选择 QMODEL=$want NGL=${ngl:-默认}"
-    QMODEL="$want" ${ngl:+NGL="$ngl"} bash "$SERVE" qwen
+    export QMODEL="$want"; [ -n "$ngl" ] && export NGL="$ngl"; bash "$SERVE" qwen
   fi
   e_up || { echo "启动 BGE 嵌入服务..."; bash "$SERVE" bge; }
   echo "等待服务就绪..."
